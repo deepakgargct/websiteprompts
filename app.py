@@ -1,71 +1,72 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import spacy.cli
 import pandas as pd
+import yake
 from urllib.parse import urljoin, urlparse
 import tldextract
 import time
-# Ensure spaCy model is available
-nlp = spacy.load("en_core_web_sm")
-# --- Utility: Extract clean text from HTML ---
+
+# --- Clean HTML Text ---
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "footer", "nav", "form"]):
         tag.decompose()
-    text = soup.get_text(separator=" ", strip=True)
-    return text
+    return soup.get_text(separator=" ", strip=True)
 
-# --- Crawl internal links ---
+# --- Crawl internal pages ---
 def crawl_site(start_url, max_pages=5):
     visited = set()
     to_visit = [start_url]
     domain = tldextract.extract(start_url).registered_domain
     page_texts = []
+    page_count = 0
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; SEO-Crawler/1.0)"}
+    progress = st.progress(0)
 
-    while to_visit and len(visited) < max_pages:
+    while to_visit and page_count < max_pages:
         url = to_visit.pop(0)
         if url in visited:
             continue
 
         try:
-            res = requests.get(url, timeout=10)
+            res = requests.get(url, headers=headers, timeout=8)
             if res.status_code != 200:
                 continue
 
             html = res.text
             text = extract_text_from_html(html)
-            page_texts.append(text)
+            if len(text) > 300:
+                page_texts.append(text)
+                page_count += 1
+                progress.progress(page_count / max_pages)
+
             visited.add(url)
 
             soup = BeautifulSoup(html, "html.parser")
             for a_tag in soup.find_all("a", href=True):
                 href = urljoin(url, a_tag["href"])
                 href_parsed = urlparse(href)
-                if href_parsed.scheme.startswith("http") and domain in href_parsed.netloc:
-                    if href not in visited and href not in to_visit:
-                        to_visit.append(href)
+                if (
+                    href_parsed.scheme.startswith("http")
+                    and domain in href_parsed.netloc
+                    and href not in visited
+                    and href not in to_visit
+                ):
+                    to_visit.append(href)
 
-            time.sleep(1)  # Be nice to servers
+            time.sleep(0.5)  # polite crawl delay
 
-        except Exception as e:
+        except Exception:
             continue
 
     return page_texts
 
-# --- Extract long-tail phrases ---
-def extract_keywords(text, max_phrases=30):
-    doc = nlp(text)
-    phrases = set()
-
-    for chunk in doc.noun_chunks:
-        phrase = chunk.text.strip().lower()
-        if 2 <= len(phrase.split()) <= 6:
-            phrases.add(phrase)
-
-    phrases = list(phrases)
-    phrases.sort(key=lambda x: (-len(x), x))
-    return phrases[:max_phrases]
+# --- Extract keywords using YAKE ---
+def extract_keywords_yake(text, max_phrases=30):
+    kw_extractor = yake.KeywordExtractor(lan="en", n=3, top=max_phrases)
+    keywords = kw_extractor.extract_keywords(text)
+    return [kw for kw, score in keywords]
 
 # --- Intent detection ---
 def detect_intent(phrase):
@@ -82,34 +83,37 @@ def detect_intent(phrase):
         return "service"
     return "blog"
 
-# --- Streamlit App ---
-st.title("🔎 Website Crawler + Long-Tail Keyword Extractor")
+# --- Streamlit App UI ---
+st.title("🔎 Long-Tail Keyword Generator from Website (Multi-Page Crawl)")
+st.markdown("Enter a website URL. This app will crawl pages, extract content, and generate keyword ideas with intent.")
 
-url = st.text_input("Enter a starting website URL (e.g., https://example.com)")
-max_pages = st.slider("How many pages to crawl?", 1, 20, 5)
+url = st.text_input("Enter a website URL (e.g., https://example.com)")
+max_pages = st.slider("Number of pages to crawl", 1, 20, 5)
 
-if st.button("🚀 Crawl and Extract"):
+if st.button("🚀 Crawl and Extract Keywords"):
     if not url.startswith("http"):
-        st.warning("Please enter a valid URL.")
+        st.warning("Please enter a valid URL starting with http or https.")
     else:
-        with st.spinner("Crawling pages and extracting content..."):
-            pages = crawl_site(url, max_pages=max_pages)
+        with st.spinner("Crawling website and extracting keywords..."):
+            pages = crawl_site(url, max_pages)
             full_text = " ".join(pages)
 
             if len(full_text) < 500:
-                st.error("❌ Not enough content was extracted.")
+                st.error("❌ Not enough content found to extract keywords.")
             else:
-                keywords = extract_keywords(full_text, max_phrases=50)
+                phrases = extract_keywords_yake(full_text, max_phrases=50)
                 results = []
-                for phrase in keywords:
+
+                for phrase in phrases:
+                    intent = detect_intent(phrase)
                     results.append({
                         "Keyword": phrase,
-                        "Intent": detect_intent(phrase),
+                        "Intent": intent,
                         "Source": url
                     })
 
                 df = pd.DataFrame(results)
-                st.success(f"✅ Extracted {len(df)} keyword suggestions from {len(pages)} pages.")
+                st.success(f"✅ Extracted {len(df)} keywords from {len(pages)} pages.")
                 st.dataframe(df)
 
                 csv = df.to_csv(index=False).encode("utf-8")
