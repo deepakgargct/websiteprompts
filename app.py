@@ -1,14 +1,16 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import spacy
+import spacy.cli
 import pandas as pd
 from urllib.parse import urljoin, urlparse
 import tldextract
 import time
 
-# Load spaCy model
+# Ensure spaCy model is available
+spacy.cli.download("en_core_web_sm")
 nlp = spacy.load("en_core_web_sm")
+
 
 # --- Utility: Extract clean text from HTML ---
 def extract_text_from_html(html):
