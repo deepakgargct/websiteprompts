@@ -6,11 +6,8 @@ import pandas as pd
 from urllib.parse import urljoin, urlparse
 import tldextract
 import time
-
 # Ensure spaCy model is available
 nlp = spacy.load("en_core_web_sm")
-
-
 # --- Utility: Extract clean text from HTML ---
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
